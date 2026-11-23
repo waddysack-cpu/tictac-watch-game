@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, user-scalable=no">
+<meta name="disabled-adaptations" content="watch">
+<title>Tic Tac</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; overflow: hidden;
+    -webkit-user-select: none; user-select: none; -webkit-tap-highlight-color: transparent; touch-action: manipulation; }
+  canvas { display: block; width: 100vw; height: 100vh; }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<script>
+(function () {
+  const cv = document.getElementById('c'), ctx = cv.getContext('2d');
+  let W, H, S, bx, by, cell;
+  function resize() {
+    const d = window.devicePixelRatio || 1;
+    W = innerWidth; H = innerHeight; S = Math.min(W, H);
+    cv.width = W * d; cv.height = H * d; ctx.setTransform(d, 0, 0, d, 0, 0);
+    const top = H * 0.16;                         // room for the status line
+    cell = Math.min(W * 0.94, H - top - H * 0.03) / 3;
+    bx = (W - cell * 3) / 2; by = top;
+  }
+  addEventListener('resize', resize); resize();
+
+  const LINES = [[0,1,2],[3,4,5],[6,7,8],[0,3,6],[1,4,7],[2,5,8],[0,4,8],[2,4,6]];
+  let tally = { w: 0, l: 0, d: 0 };
+  try { const t = JSON.parse(localStorage.getItem('tictacTally')); if (t) tally = t; } catch (e) {}
+
+  // turn: 'you' | 'cpu' | 'end'
+  let board, turn, winLine, result, cpuT, youStart = true, last;
+
+  function newGame() {
+    board = Array(9).fill(null); winLine = null; result = null;
+    turn = youStart ? 'you' : 'cpu'; cpuT = 0.5;
+    youStart = !youStart;                          // alternate who starts
+  }
+  function winner(b) {
+    for (const l of LINES) if (b[l[0]] && b[l[0]] === b[l[1]] && b[l[0]] === b[l[2]]) return l;
+    return null;
+  }
+  function checkEnd() {
+    const l = winner(board);
+    if (l) { winLine = l; result = board[l[0]] === 'X' ? 'win' : 'lose'; }
+    else if (board.every(Boolean)) result = 'draw';
+    if (!result) return false;
+    turn = 'end';
+    tally[result === 'win' ? 'w' : result === 'lose' ? 'l' : 'd']++;
+    try { localStorage.setItem('tictacTally', JSON.stringify(tally)); } catch (e) {}
+    if (navigator.vibrate) try { navigator.vibrate(result === 'lose' ? 80 : 30); } catch (e) {}
+    return true;
+  }
+
+  // CPU: perfect minimax, but sometimes plays a random move so it's beatable
+  function minimax(b, me) {
+    const l = winner(b);
+    if (l) return b[l[0]] === 'O' ? 10 : -10;
+    if (b.every(Boolean)) return 0;
+    let best = me ? -99 : 99;
+    for (let i = 0; i < 9; i++) if (!b[i]) {
+      b[i] = me ? 'O' : 'X';
+      const s = minimax(b, !me);
+      b[i] = null;
+      best = me ? Math.max(best, s) : Math.min(best, s);
+    }
+    return best;
+  }
+  function cpuMove() {
+    const free = board.map((v, i) => v ? -1 : i).filter(i => i >= 0);
+    let pick;
+    if (Math.random() < 0.25) pick = free[Math.floor(Math.random() * free.length)];
+    else {
+      let bestS = -99, opts = [];
+      for (const i of free) {
+        board[i] = 'O'; const s = minimax(board, false); board[i] = null;
+        if (s > bestS) { bestS = s; opts = [i]; } else if (s === bestS) opts.push(i);
+      }
+      pick = opts[Math.floor(Math.random() * opts.length)];
+    }
+    board[pick] = 'O';
+    if (!checkEnd()) turn = 'you';
+  }
+
+  function press(px, py) {
+    if (turn === 'end') return newGame();
+    if (turn !== 'you') return;
+    const c = Math.floor((px - bx) / cell), r = Math.floor((py - by) / cell);
+    if (c < 0 || c > 2 || r < 0 || r > 2) return;
+    const i = r * 3 + c;
+    if (board[i]) return;
+    board[i] = 'X';
+    if (!checkEnd()) { turn = 'cpu'; cpuT = 0.45; }
+  }
+  cv.addEventListener('touchstart', e => { e.preventDefault(); const t = e.changedTouches[0]; press(t.clientX, t.clientY); }, { passive: false });
+  cv.addEventListener('mousedown', e => press(e.clientX, e.clientY));
+  // PC testing: number keys 1-9 (top-left to bottom-right)
+  addEventListener('keydown', e => {
+    const m = /^Digit([1-9])$/.exec(e.code);
+    if (m) { const i = +m[1] - 1; press(bx + (i % 3 + 0.5) * cell, by + (Math.floor(i / 3) + 0.5) * cell); }
+    else if (e.code === 'Space' && turn === 'end') newGame();
+  });
+
+  function update(dt) {
+    if (turn === 'cpu') { cpuT -= dt; if (cpuT <= 0) cpuMove(); }
+  }
+
+  function text(t, x, y, size, color) {
+    ctx.fillStyle = color; ctx.font = '600 ' + size + 'px -apple-system, system-ui, sans-serif';
+    ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.fillText(t, x, y);
+  }
+  function draw() {
+    ctx.fillStyle = '#000'; ctx.fillRect(0, 0, W, H);
+    // status
+    const status = turn === 'you' ? ['Your turn', '#30d158'] : turn === 'cpu' ? ['Thinking…', '#888']
+      : result === 'win' ? ['You win!', '#30d158'] : result === 'lose' ? ['CPU wins', '#ff453a'] : ['Draw', '#ffd60a'];
+    text(status[0], W / 2, H * 0.06, S * 0.085, status[1]);
+    text('W ' + tally.w + '  L ' + tally.l + '  D ' + tally.d, W / 2, H * 0.125, S * 0.05, '#666');
+    // grid
+    ctx.strokeStyle = '#333'; ctx.lineWidth = Math.max(2, S * 0.012); ctx.lineCap = 'round';
+    for (let k = 1; k < 3; k++) {
+      ctx.beginPath(); ctx.moveTo(bx + k * cell, by + 6); ctx.lineTo(bx + k * cell, by + cell * 3 - 6); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(bx + 6, by + k * cell); ctx.lineTo(bx + cell * 3 - 6, by + k * cell); ctx.stroke();
+    }
+    // marks
+    ctx.lineWidth = Math.max(3, S * 0.022);
+    for (let i = 0; i < 9; i++) {
+      const cx = bx + (i % 3 + 0.5) * cell, cy = by + (Math.floor(i / 3) + 0.5) * cell, r = cell * 0.28;
+      const dim = winLine && !winLine.includes(i) ? 0.35 : 1;
+      ctx.globalAlpha = dim;
+      if (board[i] === 'X') {
+        ctx.strokeStyle = '#0a84ff'; ctx.beginPath();
+        ctx.moveTo(cx - r, cy - r); ctx.lineTo(cx + r, cy + r); ctx.moveTo(cx + r, cy - r); ctx.lineTo(cx - r, cy + r); ctx.stroke();
+      } else if (board[i] === 'O') {
+        ctx.strokeStyle = '#ff9f0a'; ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+    }
+    if (turn === 'end') {
+      ctx.fillStyle = 'rgba(0,0,0,0.55)'; ctx.fillRect(0, H * 0.82, W, H * 0.18);
+      text('tap for next game', W / 2, H * 0.91, S * 0.06, '#8f8');
+    }
+  }
+  function loop(t) {
+    const dt = last ? Math.min(0.05, (t - last) / 1000) : 0; last = t;
+    update(dt); draw(); requestAnimationFrame(loop);
+  }
+  newGame();
+  requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
